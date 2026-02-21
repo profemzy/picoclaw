@@ -251,7 +251,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 
 	return &ToolResult{
 		ForLLM:  output,
-		ForUser: output,
+		ForUser: "",
 		IsError: false,
 	}
 }

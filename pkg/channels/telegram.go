@@ -221,17 +221,23 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 
 	content := ""
 	mediaPaths := []string{}
-	localFiles := []string{} // 跟踪需要清理的本地文件
+	localFiles := []string{} // Track local files for deferred cleanup
 
-	// 确保临时文件在函数返回时被清理
+	// Schedule cleanup of temp files after a delay to allow the agent time to process them.
+	// The agent receives file paths asynchronously and needs the files to still exist.
 	defer func() {
-		for _, file := range localFiles {
-			if err := os.Remove(file); err != nil {
-				logger.DebugCF("telegram", "Failed to cleanup temp file", map[string]any{
-					"file":  file,
-					"error": err.Error(),
-				})
-			}
+		if len(localFiles) > 0 {
+			go func(files []string) {
+				time.Sleep(5 * time.Minute)
+				for _, file := range files {
+					if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+						logger.DebugCF("telegram", "Failed to cleanup temp file", map[string]any{
+							"file":  file,
+							"error": err.Error(),
+						})
+					}
+				}
+			}(localFiles)
 		}
 	}()
 
@@ -395,8 +401,11 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	url := c.bot.FileDownloadURL(file.FilePath)
 	logger.DebugCF("telegram", "File URL", map[string]any{"url": url})
 
-	// Use FilePath as filename for better identification
-	filename := file.FilePath + ext
+	// Use FilePath as filename; only append ext if not already present
+	filename := file.FilePath
+	if ext != "" && !strings.HasSuffix(strings.ToLower(filename), strings.ToLower(ext)) {
+		filename += ext
+	}
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
 	})

@@ -246,7 +246,23 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		SessionKey: sessionKey,
 	}
 
-	return al.processMessage(ctx, msg)
+	response, err := al.processMessage(ctx, msg)
+	if err != nil {
+		return response, err
+	}
+
+	// processMessage uses SendResponse: false (the main inbound loop handles
+	// sending for regular messages). For direct/cron callers there is no outer
+	// loop, so we publish the response here.
+	if response != "" && channel != "cli" {
+		al.bus.PublishOutbound(bus.OutboundMessage{
+			Channel: channel,
+			ChatID:  chatID,
+			Content: response,
+		})
+	}
+
+	return response, nil
 }
 
 // ProcessHeartbeat processes a heartbeat request without session history.
@@ -319,11 +335,19 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"matched_by":  route.MatchedBy,
 		})
 
+	// Append media file paths to message content so the agent can reference them
+	userMessage := msg.Content
+	if len(msg.Media) > 0 {
+		for _, path := range msg.Media {
+			userMessage += fmt.Sprintf("\n[attached_file: %s]", path)
+		}
+	}
+
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:      sessionKey,
 		Channel:         msg.Channel,
 		ChatID:          msg.ChatID,
-		UserMessage:     msg.Content,
+		UserMessage:     userMessage,
 		DefaultResponse: "I've completed processing but have no response to give.",
 		EnableSummary:   true,
 		SendResponse:    false,
