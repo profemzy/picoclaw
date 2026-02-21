@@ -1,0 +1,270 @@
+# =============================================================================
+# Pipeline: Oluto Agent (PicoClaw) CI/CD
+# Purpose: Build, push, and deploy PicoClaw agent to AKS (DEV → PROD)
+# Triggers: Changes to Go source, skills, Makefile, or Dockerfile on master/main
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - master
+      - main
+  paths:
+    include:
+      - cmd/**
+      - pkg/**
+      - go.mod
+      - go.sum
+      - Makefile
+      - Dockerfile
+      - deploy/**
+
+pr:
+  branches:
+    include:
+      - master
+      - main
+
+variables:
+  acrLoginServer: "wackopscoachdevacr.azurecr.io"
+  acrLoginServerProd: "wackopscoachprodacr.azurecr.io"
+  azureServiceConnection: "terraformiacdevops1"
+  imageRepository: "oluto-agent"
+  tag: "$(Build.BuildId)"
+  latestTag: "latest"
+
+parameters:
+  - name: deployDev
+    displayName: "Deploy to DEV"
+    type: boolean
+    default: true
+  - name: deployProd
+    displayName: "Deploy to PROD"
+    type: boolean
+    default: true
+
+stages:
+  # ==========================================================================
+  # Stage 1: Build & Push to DEV ACR
+  # ==========================================================================
+  - stage: Build
+    displayName: "Build & Push"
+    jobs:
+      - job: Build_Agent
+        displayName: "Build & Push Agent Image"
+        pool:
+          vmImage: "ubuntu-24.04"
+        steps:
+          - checkout: self
+            displayName: "Checkout Source Code"
+
+          - task: AzureCLI@2
+            displayName: "Login to DEV ACR"
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                echo "Logging into ACR: $(acrLoginServer)"
+                az acr login --name $(acrLoginServer)
+
+          - task: Docker@2
+            displayName: "Build Agent Image"
+            inputs:
+              command: "build"
+              repository: "$(acrLoginServer)/$(imageRepository)"
+              Dockerfile: "$(Build.SourcesDirectory)/Dockerfile"
+              buildContext: "$(Build.SourcesDirectory)"
+              tags: |
+                $(tag)
+                $(latestTag)
+
+          - task: Docker@2
+            displayName: "Push Agent Image"
+            inputs:
+              command: "push"
+              repository: "$(acrLoginServer)/$(imageRepository)"
+              tags: |
+                $(tag)
+                $(latestTag)
+
+      - job: Publish_Build_Info
+        displayName: "Publish Build Info"
+        dependsOn: Build_Agent
+        pool:
+          vmImage: "ubuntu-24.04"
+        steps:
+          - task: Bash@3
+            displayName: "Export Build Info"
+            inputs:
+              targetType: "inline"
+              script: |
+                echo "Image Tag: $(tag)"
+                echo "Agent: $(acrLoginServer)/$(imageRepository):$(tag)"
+                echo "$(tag)" > $(Build.ArtifactStagingDirectory)/image-tag.txt
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Build Info"
+            inputs:
+              PathtoPublish: "$(Build.ArtifactStagingDirectory)"
+              ArtifactName: "build-info"
+              publishLocation: "Container"
+
+  # ==========================================================================
+  # Stage 2: Deploy to DEV
+  # ==========================================================================
+  - stage: Deploy_DEV
+    displayName: "Deploy to DEV"
+    dependsOn: Build
+    condition: and(succeeded(), ${{ parameters.deployDev }})
+    jobs:
+      - deployment: Deploy_DEV_AKS
+        displayName: "Deploy to DEV AKS"
+        pool:
+          vmImage: "ubuntu-24.04"
+        environment: "dev"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: "Install kubectl and kubelogin"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az aks install-cli
+                      echo "##vso[task.prependpath]/usr/local/bin"
+
+                - task: AzureCLI@2
+                  displayName: "Rollout Restart Agent (DEV)"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az aks get-credentials \
+                        --resource-group wackopscoach-dev-rg \
+                        --name wackopscoach-dev-aks \
+                        --overwrite-existing
+                      kubelogin convert-kubeconfig -l azurecli
+                      kubectl rollout restart deployment/oluto-agent -n oluto
+                      kubectl rollout status deployment/oluto-agent -n oluto --timeout=300s
+
+                - task: AzureCLI@2
+                  displayName: "Verify DEV Health"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      sleep 10
+                      az aks get-credentials \
+                        --resource-group wackopscoach-dev-rg \
+                        --name wackopscoach-dev-aks \
+                        --overwrite-existing
+                      kubelogin convert-kubeconfig -l azurecli
+                      kubectl port-forward deployment/oluto-agent 18790:18790 -n oluto &
+                      PF_PID=$!
+                      sleep 5
+                      HEALTH=$(curl -sf http://localhost:18790/health || echo "FAILED")
+                      kill $PF_PID 2>/dev/null || true
+                      echo "DEV Health: $HEALTH"
+                      echo "$HEALTH" | grep -q '"status":"ok"' || exit 1
+
+  # ==========================================================================
+  # Stage 3: Promote & Deploy to PROD
+  # ==========================================================================
+  - stage: Deploy_PROD
+    displayName: "Deploy to PROD"
+    dependsOn: Deploy_DEV
+    condition: and(succeeded(), ${{ parameters.deployProd }})
+    jobs:
+      - job: Approve_PROD
+        displayName: "Approve PROD Deployment"
+        pool: server
+        steps:
+          - task: ManualValidation@1
+            displayName: "Approve deployment to PROD"
+            timeoutInMinutes: 1440
+            inputs:
+              notifyUsers: ""
+              instructions: "DEV deployment succeeded. Please verify the agent is healthy in DEV and approve PROD deployment."
+
+      - deployment: Deploy_PROD_AKS
+        displayName: "Deploy to PROD AKS"
+        dependsOn: Approve_PROD
+        pool:
+          vmImage: "ubuntu-24.04"
+        environment: "prod"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: "Promote Image to PROD ACR"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      echo "Promoting agent image from $(acrLoginServer) to $(acrLoginServerProd)"
+                      echo "Tag: $(tag)"
+                      az acr import \
+                        --name wackopscoachprodacr \
+                        --source $(acrLoginServer)/$(imageRepository):$(tag) \
+                        --image $(imageRepository):$(tag) \
+                        --force
+                      az acr import \
+                        --name wackopscoachprodacr \
+                        --source $(acrLoginServer)/$(imageRepository):$(latestTag) \
+                        --image $(imageRepository):$(latestTag) \
+                        --force
+                      echo "Agent image promoted to PROD ACR"
+
+                - task: AzureCLI@2
+                  displayName: "Install kubectl and kubelogin"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az aks install-cli
+                      echo "##vso[task.prependpath]/usr/local/bin"
+
+                - task: AzureCLI@2
+                  displayName: "Rollout Restart Agent (PROD)"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az aks get-credentials \
+                        --resource-group wackopscoach-prod-rg \
+                        --name wackopscoach-prod-aks \
+                        --overwrite-existing
+                      kubelogin convert-kubeconfig -l azurecli
+                      kubectl rollout restart deployment/oluto-agent -n oluto
+                      kubectl rollout status deployment/oluto-agent -n oluto --timeout=300s
+
+                - task: AzureCLI@2
+                  displayName: "Verify PROD Health"
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      sleep 10
+                      az aks get-credentials \
+                        --resource-group wackopscoach-prod-rg \
+                        --name wackopscoach-prod-aks \
+                        --overwrite-existing
+                      kubelogin convert-kubeconfig -l azurecli
+                      kubectl port-forward deployment/oluto-agent 18790:18790 -n oluto &
+                      PF_PID=$!
+                      sleep 5
+                      HEALTH=$(curl -sf http://localhost:18790/health || echo "FAILED")
+                      kill $PF_PID 2>/dev/null || true
+                      echo "PROD Health: $HEALTH"
+                      echo "$HEALTH" | grep -q '"status":"ok"' || exit 1

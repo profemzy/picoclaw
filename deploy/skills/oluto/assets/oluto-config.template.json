@@ -1,0 +1,6 @@
+{
+  "base_url": "http://localhost:3000",
+  "email": "your-email@example.com",
+  "password": "your-password",
+  "default_business_id": ""
+}

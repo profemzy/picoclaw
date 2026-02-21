@@ -20,7 +20,7 @@ RUN make build
 # ============================================================
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata curl
+RUN apk add --no-cache ca-certificates tzdata curl jq bash
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
@@ -38,6 +38,10 @@ USER picoclaw
 
 # Run onboard to create initial directories and config
 RUN /usr/local/bin/picoclaw onboard
+
+# Copy Oluto skill into container (scripts, references, assets)
+COPY --chown=picoclaw:picoclaw deploy/skills/oluto/ /home/picoclaw/.picoclaw/skills/oluto/
+RUN chmod +x /home/picoclaw/.picoclaw/skills/oluto/scripts/*.sh
 
 ENTRYPOINT ["picoclaw"]
 CMD ["gateway"]
