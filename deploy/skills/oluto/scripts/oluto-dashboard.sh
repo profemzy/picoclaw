@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${HOME}/.oluto-config.json"
 
-BID="${1:-$(jq -r '.default_business_id // empty' "$CONFIG_FILE")}"
+BID="${OLUTO_BUSINESS_ID:-${1:-$(jq -r '.default_business_id // empty' "$CONFIG_FILE")}}"
 if [ -z "$BID" ]; then
     echo "ERROR: No business_id provided and no default_business_id in config" >&2
     exit 1

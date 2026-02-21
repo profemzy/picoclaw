@@ -192,6 +192,7 @@ func gatewayCmd() {
 		health.WithAgentLoop(agentLoop),
 		health.WithPairing(cfg.Gateway.RequirePairing, cfg.Gateway.PairedTokens, configPath),
 		health.WithModel(cfg.Agents.Defaults.Model),
+		health.WithJWTAuth(cfg.Gateway.JWTSecret),
 	)
 	go func() {
 		defer func() {

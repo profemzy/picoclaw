@@ -412,6 +412,7 @@ type GatewayConfig struct {
 	Port           int      `json:"port"            env:"PICOCLAW_GATEWAY_PORT"`
 	RequirePairing bool     `json:"require_pairing" env:"PICOCLAW_GATEWAY_REQUIRE_PAIRING"`
 	PairedTokens   []string `json:"paired_tokens,omitempty"`
+	JWTSecret      string   `json:"jwt_secret,omitempty" env:"PICOCLAW_GATEWAY_JWT_SECRET"`
 }
 
 type BraveConfig struct {

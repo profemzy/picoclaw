@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # oluto-auth.sh — Authenticate with LedgerForge and output a valid JWT token.
-# Caches tokens at ~/.oluto-token.json, auto-refreshes when expired.
+# If OLUTO_JWT_TOKEN env var is set (mobile app passthrough), outputs it directly.
+# Otherwise, uses config-based login with caching at ~/.oluto-token.json.
 set -euo pipefail
 
 # Ensure jq and other local binaries are in PATH
 export PATH="$HOME/.local/bin:$PATH"
+
+# Mobile app JWT passthrough: if token is provided via env, use it directly
+if [ -n "${OLUTO_JWT_TOKEN:-}" ]; then
+    echo "$OLUTO_JWT_TOKEN"
+    exit 0
+fi
 
 CONFIG_FILE="${HOME}/.oluto-config.json"
 TOKEN_FILE="${HOME}/.oluto-token.json"

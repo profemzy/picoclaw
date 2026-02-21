@@ -16,9 +16,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-BID=$(jq -r '.default_business_id' "$CONFIG_FILE")
+BID="${OLUTO_BUSINESS_ID:-$(jq -r '.default_business_id' "$CONFIG_FILE")}"
 if [ -z "$BID" ] || [ "$BID" = "null" ]; then
-  echo '{"error": "No default_business_id in config."}' >&2
+  echo '{"error": "No business_id provided and no default_business_id in config."}' >&2
   exit 1
 fi
 

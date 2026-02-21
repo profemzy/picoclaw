@@ -14,9 +14,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/constants"
 )
+
+// LedgerForgeClaims represents the JWT claims from LedgerForge auth tokens.
+type LedgerForgeClaims struct {
+	Sub      string `json:"sub"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	jwt.RegisteredClaims
+}
 
 type Server struct {
 	server    *http.Server
@@ -33,6 +44,7 @@ type Server struct {
 	pairingUsed    bool
 	configPath     string
 	model          string
+	jwtSecret      string
 }
 
 type Check struct {
@@ -50,7 +62,8 @@ type StatusResponse struct {
 }
 
 type WebhookRequest struct {
-	Message string `json:"message"`
+	Message    string `json:"message"`
+	BusinessID string `json:"business_id,omitempty"`
 }
 
 type WebhookResponse struct {
@@ -84,6 +97,13 @@ func WithPairing(require bool, tokenHashes []string, configPath string) ServerOp
 func WithModel(model string) ServerOption {
 	return func(s *Server) {
 		s.model = model
+	}
+}
+
+// WithJWTAuth enables LedgerForge JWT validation on the webhook endpoint.
+func WithJWTAuth(secret string) ServerOption {
+	return func(s *Server) {
+		s.jwtSecret = secret
 	}
 }
 
@@ -256,11 +276,34 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if !s.isAuthorized(r) {
-		w.WriteHeader(http.StatusUnauthorized)
-		errMsg := "unauthorized: invalid or missing bearer token"
-		json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
-		return
+	// Try JWT auth first if configured, fall back to pc_ token auth
+	var sessionKey string
+	var userCtx context.Context
+	rawToken := s.extractRawToken(r)
+
+	if s.jwtSecret != "" && rawToken != "" && !strings.HasPrefix(rawToken, "pc_") {
+		claims, err := s.validateJWT(rawToken)
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			errMsg := "unauthorized: " + err.Error()
+			json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
+			return
+		}
+		sessionKey = "user:" + claims.Sub
+		// Store JWT and user context for skill script passthrough
+		userCtx = context.WithValue(r.Context(), constants.ContextKeyJWTToken, rawToken)
+		userCtx = context.WithValue(userCtx, constants.ContextKeyUserID, claims.Sub)
+	} else {
+		// Legacy pc_ token auth
+		if !s.isAuthorized(r) {
+			w.WriteHeader(http.StatusUnauthorized)
+			errMsg := "unauthorized: invalid or missing bearer token"
+			json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
+			return
+		}
+		tokenHash := s.extractTokenHash(r)
+		sessionKey = "api:" + tokenHash[:8]
+		userCtx = r.Context()
 	}
 
 	var req WebhookRequest
@@ -278,15 +321,16 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build session key from token hash prefix
-	tokenHash := s.extractTokenHash(r)
-	sessionKey := "api:" + tokenHash[:8]
+	// Store business_id in context if provided
+	if req.BusinessID != "" {
+		userCtx = context.WithValue(userCtx, constants.ContextKeyBusinessID, req.BusinessID)
+	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(userCtx, 120*time.Second)
 	defer cancel()
 
 	response, err := s.agentLoop.ProcessDirectWithChannel(
-		ctx, req.Message, sessionKey, "api", "desktop-client",
+		ctx, req.Message, sessionKey, "api", "mobile-client",
 	)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -301,6 +345,36 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		Response: &response,
 		Model:    &model,
 	})
+}
+
+// validateJWT validates a LedgerForge JWT token and returns its claims.
+func (s *Server) validateJWT(tokenString string) (*LedgerForgeClaims, error) {
+	claims := &LedgerForgeClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(s.jwtSecret), nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %w", err)
+	}
+	if !token.Valid {
+		return nil, fmt.Errorf("token is not valid")
+	}
+	if claims.Sub == "" {
+		return nil, fmt.Errorf("token missing sub claim")
+	}
+	return claims, nil
+}
+
+// extractRawToken extracts the raw bearer token from the Authorization header.
+func (s *Server) extractRawToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(auth, "Bearer ")
 }
 
 func (s *Server) pairHandler(w http.ResponseWriter, r *http.Request) {

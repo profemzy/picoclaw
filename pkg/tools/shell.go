@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
 type ExecTool struct {
@@ -183,6 +184,14 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 	if cwd != "" {
 		cmd.Dir = cwd
+	}
+
+	// Inject user context env vars from context (for mobile app JWT passthrough)
+	if jwtToken, ok := ctx.Value(constants.ContextKeyJWTToken).(string); ok && jwtToken != "" {
+		cmd.Env = append(os.Environ(), "OLUTO_JWT_TOKEN="+jwtToken)
+		if businessID, ok := ctx.Value(constants.ContextKeyBusinessID).(string); ok && businessID != "" {
+			cmd.Env = append(cmd.Env, "OLUTO_BUSINESS_ID="+businessID)
+		}
 	}
 
 	prepareCommandForTermination(cmd)

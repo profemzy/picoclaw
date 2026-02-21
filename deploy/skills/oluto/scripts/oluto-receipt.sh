@@ -25,7 +25,7 @@ if [ ! -f "$FILE_PATH" ]; then
 fi
 
 BASE_URL=$(jq -r '.base_url' "$CONFIG_FILE")
-BID=$(jq -r '.default_business_id' "$CONFIG_FILE")
+BID="${OLUTO_BUSINESS_ID:-$(jq -r '.default_business_id' "$CONFIG_FILE")}"
 TOKEN=$("$AUTH")
 
 # Step 1: OCR extraction

@@ -23,7 +23,7 @@ GST="${5:-0.00}"
 PST="${6:-0.00}"
 DESCRIPTION="${7:-Receipt capture - $VENDOR}"
 
-BID=$(jq -r '.default_business_id' "$CONFIG_FILE")
+BID="${OLUTO_BUSINESS_ID:-$(jq -r '.default_business_id' "$CONFIG_FILE")}"
 
 BODY=$(jq -n \
     --arg vendor "$VENDOR" \
