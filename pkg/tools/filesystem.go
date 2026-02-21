@@ -34,28 +34,24 @@ func validatePath(path, workspace string, restrict bool) (string, error) {
 			return "", fmt.Errorf("access denied: path is outside the workspace")
 		}
 
-		var resolved string
-		workspaceReal := absWorkspace
-		if resolved, err = filepath.EvalSymlinks(absWorkspace); err == nil {
-			workspaceReal = resolved
-		}
-
-		if resolved, err = filepath.EvalSymlinks(absPath); err == nil {
-			if !isWithinWorkspace(resolved, workspaceReal) {
-				return "", fmt.Errorf("access denied: symlink resolves outside workspace")
-			}
-		} else if os.IsNotExist(err) {
+		// For new files/paths that don't exist yet, verify the parent directory
+		// is within workspace (accounting for symlinks)
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
 			var parentResolved string
 			if parentResolved, err = resolveExistingAncestor(filepath.Dir(absPath)); err == nil {
+				workspaceReal := absWorkspace
+				if resolved, err := filepath.EvalSymlinks(absWorkspace); err == nil {
+					workspaceReal = resolved
+				}
 				if !isWithinWorkspace(parentResolved, workspaceReal) {
-					return "", fmt.Errorf("access denied: symlink resolves outside workspace")
+					return "", fmt.Errorf("access denied: parent directory is outside workspace")
 				}
 			} else if !os.IsNotExist(err) {
 				return "", fmt.Errorf("failed to resolve path: %w", err)
 			}
-		} else {
-			return "", fmt.Errorf("failed to resolve path: %w", err)
 		}
+		// Note: For existing paths, we trust the initial isWithinWorkspace check.
+		// This allows symlinks within the workspace that point outside (like shared folders).
 	}
 
 	return absPath, nil

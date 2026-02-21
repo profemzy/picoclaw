@@ -55,6 +55,9 @@ func (cb *ContextBuilder) getIdentity() string {
 
 	// Build tools section dynamically
 	toolsSection := cb.buildToolsSection()
+	
+	// Find symlinked directories in workspace
+	symlinksSection := cb.buildSymlinksSection()
 
 	return fmt.Sprintf(`# picoclaw 🦞
 
@@ -71,6 +74,7 @@ Your workspace is at: %s
 - Memory: %s/memory/MEMORY.md
 - Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
 - Skills: %s/skills/{skill-name}/SKILL.md
+%s
 
 %s
 
@@ -81,7 +85,7 @@ Your workspace is at: %s
 2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
 3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md`,
-		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath)
+		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, symlinksSection, toolsSection, workspacePath)
 }
 
 func (cb *ContextBuilder) buildToolsSection() string {
@@ -106,6 +110,29 @@ func (cb *ContextBuilder) buildToolsSection() string {
 	}
 
 	return sb.String()
+}
+
+func (cb *ContextBuilder) buildSymlinksSection() string {
+	entries, err := os.ReadDir(cb.workspace)
+	if err != nil {
+		return ""
+	}
+
+	var symlinks []string
+	for _, entry := range entries {
+		// Check if entry is a symlink by attempting to read its link target
+		linkPath := filepath.Join(cb.workspace, entry.Name())
+		target, err := os.Readlink(linkPath)
+		if err == nil {
+			symlinks = append(symlinks, fmt.Sprintf("- %s -> %s", entry.Name(), target))
+		}
+	}
+
+	if len(symlinks) == 0 {
+		return ""
+	}
+
+	return "\n## Linked Directories\n\nUse these paths to access external directories:\n" + strings.Join(symlinks, "\n")
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {

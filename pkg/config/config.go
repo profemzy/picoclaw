@@ -408,8 +408,10 @@ func (c *ModelConfig) Validate() error {
 }
 
 type GatewayConfig struct {
-	Host string `json:"host" env:"PICOCLAW_GATEWAY_HOST"`
-	Port int    `json:"port" env:"PICOCLAW_GATEWAY_PORT"`
+	Host           string   `json:"host"            env:"PICOCLAW_GATEWAY_HOST"`
+	Port           int      `json:"port"            env:"PICOCLAW_GATEWAY_PORT"`
+	RequirePairing bool     `json:"require_pairing" env:"PICOCLAW_GATEWAY_REQUIRE_PAIRING"`
+	PairedTokens   []string `json:"paired_tokens,omitempty"`
 }
 
 type BraveConfig struct {

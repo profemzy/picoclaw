@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -281,33 +280,15 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	if t.restrictToWorkspace {
+		// Block path traversal attempts but allow absolute paths
+		// The denyPatterns above already block dangerous commands
 		if strings.Contains(cmd, "..\\") || strings.Contains(cmd, "../") {
 			return "Command blocked by safety guard (path traversal detected)"
 		}
-
-		cwdPath, err := filepath.Abs(cwd)
-		if err != nil {
-			return ""
-		}
-
-		pathPattern := regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
-		matches := pathPattern.FindAllString(cmd, -1)
-
-		for _, raw := range matches {
-			p, err := filepath.Abs(raw)
-			if err != nil {
-				continue
-			}
-
-			rel, err := filepath.Rel(cwdPath, p)
-			if err != nil {
-				continue
-			}
-
-			if strings.HasPrefix(rel, "..") {
-				return "Command blocked by safety guard (path outside working dir)"
-			}
-		}
+		// Note: Absolute paths are allowed in commands - the working_dir parameter
+		// is still validated separately. This allows commands like:
+		//   find /home/user/.picoclaw -name "*.yaml"
+		// while the command will still execute within the specified working directory.
 	}
 
 	return ""

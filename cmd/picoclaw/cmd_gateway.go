@@ -186,13 +186,34 @@ func gatewayCmd() {
 		fmt.Printf("Error starting channels: %v\n", err)
 	}
 
-	healthServer := health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
+	configPath := getConfigPath()
+	healthServer := health.NewServer(
+		cfg.Gateway.Host, cfg.Gateway.Port,
+		health.WithAgentLoop(agentLoop),
+		health.WithPairing(cfg.Gateway.RequirePairing, cfg.Gateway.PairedTokens, configPath),
+		health.WithModel(cfg.Agents.Defaults.Model),
+	)
 	go func() {
-		if err := healthServer.Start(); err != nil && err != http.ErrServerClosed {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("PANIC in health server: %v\n", r)
+			}
+		}()
+		err := healthServer.Start()
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Printf("Error: Health server failed: %v\n", err)
 			logger.ErrorCF("health", "Health server error", map[string]any{"error": err.Error()})
+		} else {
+			fmt.Printf("Health server stopped (err=%v)\n", err)
 		}
 	}()
 	fmt.Printf("✓ Health endpoints available at http://%s:%d/health and /ready\n", cfg.Gateway.Host, cfg.Gateway.Port)
+	fmt.Printf("✓ API endpoints available: POST /webhook, POST /pair\n")
+	if code := healthServer.GetPairingCode(); code != "" {
+		fmt.Printf("\n🔑 Pairing code: %s\n", code)
+		fmt.Println("  Use this code in the desktop client to pair with this gateway.")
+		fmt.Println("  The code is one-time use and will expire after pairing.\n")
+	}
 
 	go agentLoop.Run(ctx)
 
