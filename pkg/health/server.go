@@ -323,6 +323,9 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		message = r.FormValue("message")
 		businessID = r.FormValue("business_id")
 
+		// Save uploaded files to workspace/media/ so the agent's read_file tool can access them
+		workspace := s.agentLoop.DefaultWorkspace()
+
 		if r.MultipartForm != nil && r.MultipartForm.File != nil {
 			for _, fhs := range r.MultipartForm.File {
 				for _, fh := range fhs {
@@ -330,7 +333,7 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 					if err != nil {
 						continue
 					}
-					localPath := utils.SaveUploadedFile(file, fh.Filename)
+					localPath := utils.SaveUploadedFile(file, fh.Filename, workspace)
 					file.Close()
 					if localPath != "" {
 						mediaPaths = append(mediaPaths, localPath)
@@ -358,9 +361,10 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default message for file-only uploads
+	// Default message for file-only uploads — include "receipt" keyword
+	// so the skill's receipt detection triggers automatically
 	if strings.TrimSpace(message) == "" {
-		message = "Process the attached file"
+		message = "Process the attached receipt"
 	}
 
 	// Store business_id in context if provided

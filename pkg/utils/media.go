@@ -142,10 +142,17 @@ func DownloadFileSimple(url, filename string) string {
 	})
 }
 
-// SaveUploadedFile saves an uploaded multipart file to the picoclaw_media temp directory.
+// SaveUploadedFile saves an uploaded multipart file to a media directory.
+// If baseDir is non-empty, files are saved to {baseDir}/media/ (within the workspace).
+// Otherwise falls back to {tmpdir}/picoclaw_media/.
 // Returns the local file path or empty string on error.
-func SaveUploadedFile(src io.Reader, filename string) string {
-	mediaDir := filepath.Join(os.TempDir(), "picoclaw_media")
+func SaveUploadedFile(src io.Reader, filename, baseDir string) string {
+	var mediaDir string
+	if baseDir != "" {
+		mediaDir = filepath.Join(baseDir, "media")
+	} else {
+		mediaDir = filepath.Join(os.TempDir(), "picoclaw_media")
+	}
 	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
 		logger.ErrorCF("webhook", "Failed to create media directory", map[string]any{
 			"error": err.Error(),

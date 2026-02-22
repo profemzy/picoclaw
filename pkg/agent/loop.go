@@ -230,6 +230,15 @@ func (al *AgentLoop) RecordLastChatID(chatID string) error {
 	return al.state.SetLastChatID(chatID)
 }
 
+// DefaultWorkspace returns the workspace path of the default agent.
+func (al *AgentLoop) DefaultWorkspace() string {
+	agent := al.registry.GetDefaultAgent()
+	if agent != nil {
+		return agent.Workspace
+	}
+	return ""
+}
+
 func (al *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey string) (string, error) {
 	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct")
 }

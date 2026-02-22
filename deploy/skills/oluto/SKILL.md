@@ -362,13 +362,14 @@ Report: tax_collected (GST/HST you charged customers) minus tax_itc (input tax c
 
 Process receipt images ONLY when the user explicitly indicates it's a receipt. Look for keywords like "receipt", "snap", "expense", "capture", "log this", or "book this" in the caption or recent message context. If the user sends a photo without receipt context, do NOT auto-process it — just respond normally.
 
-### How to Detect a Receipt Photo
-The message will contain:
+### How to Detect a Receipt Upload
+The message will contain an `[attached_file: ...]` marker with the local file path:
 ```
-[image: photo]
-[attached_file: /tmp/picoclaw_media/somefile.jpg]
+[attached_file: /home/picoclaw/.picoclaw/workspace/media/abc12345_receipt.jpg]
 ```
-Only proceed with receipt processing if the user's caption or recent messages indicate this is a receipt (e.g., "receipt", "snap this", "log this expense").
+The file is already saved locally. Do NOT try to `read_file` on it — PDFs and images are binary and unreadable as text. Instead, pass the path directly to `oluto-ocr.sh` as shown below.
+
+Only proceed with receipt processing if the user's caption or recent messages indicate this is a receipt (e.g., "receipt", "snap this", "log this expense", "process the attached receipt").
 
 ### Workflow — 2 Steps
 
@@ -420,6 +421,7 @@ If the amount could not be determined, tell the user and ask them to provide it.
 ### STRICT Rules
 - ONLY process when user explicitly indicates it's a receipt (caption or context keywords)
 - Extract the file path from `[attached_file: ...]` — do NOT hardcode paths
+- Do NOT use `read_file` on receipt files — they are binary (PDF/image) and will fail or return garbage. Always use `oluto-ocr.sh` instead.
 - Run ONLY `oluto-ocr.sh` and `oluto-create-expense.sh` — do NOT create your own scripts or call curl directly
 - Use YOUR intelligence to extract vendor/amount/date from the OCR text — do NOT rely on regex or structured OCR fields
 - Do NOT show raw OCR text or JSON to the user — only show the final summary
