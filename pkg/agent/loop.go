@@ -230,6 +230,14 @@ func (al *AgentLoop) RecordLastChatID(chatID string) error {
 	return al.state.SetLastChatID(chatID)
 }
 
+// GetActiveAuth returns all persisted business auth entries for heartbeat use.
+func (al *AgentLoop) GetActiveAuth() map[string]state.AuthEntry {
+	if al.state == nil {
+		return nil
+	}
+	return al.state.GetActiveAuth()
+}
+
 // DefaultWorkspace returns the workspace path of the default agent.
 func (al *AgentLoop) DefaultWorkspace() string {
 	agent := al.registry.GetDefaultAgent()
@@ -437,6 +445,15 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, agent *AgentInstance, opt
 			channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 			if err := al.RecordLastChannel(channelKey); err != nil {
 				logger.WarnCF("agent", "Failed to record last channel", map[string]any{"error": err.Error()})
+			}
+		}
+	}
+
+	// 0b. Persist auth context per business for heartbeat (JWT + business_id from user requests)
+	if jwtToken, ok := ctx.Value(constants.ContextKeyJWTToken).(string); ok && jwtToken != "" {
+		if businessID, ok := ctx.Value(constants.ContextKeyBusinessID).(string); ok && businessID != "" {
+			if err := al.state.SetBusinessAuth(businessID, jwtToken, opts.Channel, opts.ChatID); err != nil {
+				logger.WarnCF("agent", "Failed to record business auth", map[string]any{"error": err.Error()})
 			}
 		}
 	}

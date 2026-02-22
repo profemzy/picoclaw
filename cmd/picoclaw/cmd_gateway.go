@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
 	"github.com/sipeed/picoclaw/pkg/health"
@@ -93,22 +94,53 @@ func gatewayCmd() {
 	)
 	heartbeatService.SetBus(msgBus)
 	heartbeatService.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
-		// Use cli:direct as fallback if no valid channel
-		if channel == "" || chatID == "" {
-			channel, chatID = "cli", "direct"
+		// Get all active business auth entries
+		activeAuth := agentLoop.GetActiveAuth()
+
+		if len(activeAuth) == 0 {
+			// No user has sent a message yet — fall back to channel from state
+			if channel == "" || chatID == "" {
+				channel, chatID = "cli", "direct"
+			}
+			response, hbErr := agentLoop.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
+			if hbErr != nil {
+				return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", hbErr))
+			}
+			if response == "HEARTBEAT_OK" {
+				return tools.SilentResult("Heartbeat OK")
+			}
+			return tools.SilentResult(response)
 		}
-		// Use ProcessHeartbeat - no session history, each heartbeat is independent
-		var response string
-		response, err = agentLoop.ProcessHeartbeat(context.Background(), prompt, channel, chatID)
-		if err != nil {
-			return tools.ErrorResult(fmt.Sprintf("Heartbeat error: %v", err))
+
+		// Run heartbeat for each active business with their auth context
+		for businessID, entry := range activeAuth {
+			ctx := context.Background()
+			ctx = context.WithValue(ctx, constants.ContextKeyJWTToken, entry.JWTToken)
+			ctx = context.WithValue(ctx, constants.ContextKeyBusinessID, businessID)
+
+			// Use the business's last active channel for delivery
+			hbChannel := entry.Channel
+			hbChatID := entry.ChatID
+			if hbChannel == "" || hbChatID == "" {
+				hbChannel, hbChatID = channel, chatID
+			}
+			if hbChannel == "" || hbChatID == "" {
+				hbChannel, hbChatID = "cli", "direct"
+			}
+
+			response, hbErr := agentLoop.ProcessHeartbeat(ctx, prompt, hbChannel, hbChatID)
+			if hbErr != nil {
+				logger.WarnCF("heartbeat", "Heartbeat failed for business",
+					map[string]any{"business_id": businessID, "error": hbErr.Error()})
+				continue
+			}
+			if response != "HEARTBEAT_OK" {
+				logger.InfoCF("heartbeat", "Heartbeat result for business",
+					map[string]any{"business_id": businessID, "response_length": len(response)})
+			}
 		}
-		if response == "HEARTBEAT_OK" {
-			return tools.SilentResult("Heartbeat OK")
-		}
-		// For heartbeat, always return silent - the subagent result will be
-		// sent to user via processSystemMessage when the async task completes
-		return tools.SilentResult(response)
+
+		return tools.SilentResult("Heartbeat completed for all businesses")
 	})
 
 	channelManager, err := channels.NewManager(cfg, msgBus)

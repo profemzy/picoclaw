@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+// AuthEntry stores auth context for a specific business.
+type AuthEntry struct {
+	JWTToken  string    `json:"jwt_token"`
+	Channel   string    `json:"channel"`
+	ChatID    string    `json:"chat_id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // State represents the persistent state for a workspace.
 // It includes information about the last active channel/chat.
 type State struct {
@@ -18,6 +26,9 @@ type State struct {
 
 	// LastChatID is the last chat ID used for communication
 	LastChatID string `json:"last_chat_id,omitempty"`
+
+	// ActiveAuth stores auth per business ID for heartbeat use
+	ActiveAuth map[string]AuthEntry `json:"active_auth,omitempty"`
 
 	// Timestamp is the last time this state was updated
 	Timestamp time.Time `json:"timestamp"`
@@ -112,6 +123,44 @@ func (sm *Manager) GetLastChatID() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.state.LastChatID
+}
+
+// SetBusinessAuth persists auth context for a specific business.
+// Each business gets its own entry so heartbeat can serve all active businesses.
+func (sm *Manager) SetBusinessAuth(businessID, jwtToken, channel, chatID string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.state.ActiveAuth == nil {
+		sm.state.ActiveAuth = make(map[string]AuthEntry)
+	}
+
+	sm.state.ActiveAuth[businessID] = AuthEntry{
+		JWTToken:  jwtToken,
+		Channel:   channel,
+		ChatID:    chatID,
+		UpdatedAt: time.Now(),
+	}
+	sm.state.Timestamp = time.Now()
+
+	if err := sm.saveAtomic(); err != nil {
+		return fmt.Errorf("failed to save state atomically: %w", err)
+	}
+
+	return nil
+}
+
+// GetActiveAuth returns all active business auth entries.
+func (sm *Manager) GetActiveAuth() map[string]AuthEntry {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	// Return a copy to avoid races
+	result := make(map[string]AuthEntry, len(sm.state.ActiveAuth))
+	for k, v := range sm.state.ActiveAuth {
+		result[k] = v
+	}
+	return result
 }
 
 // GetTimestamp returns the timestamp of the last state update.
