@@ -75,10 +75,14 @@ elif [ "$AMOUNT" = "0.00" ] || [ "$AMOUNT" = "0" ] || [ "$AMOUNT" = "null" ]; th
     fi
 fi
 
-# Check for CAD conversion (e.g. "Charged CA$26.91 using 1 USD = 1.4162 CAD")
-CAD_AMOUNT=$(echo "$RAW_TEXT" | grep -i 'CA\$' | extract_dollar || true)
-if [ -n "$CAD_AMOUNT" ]; then
-    AMOUNT="$CAD_AMOUNT"
+# Check for USD-to-CAD conversion (e.g. "Charged CA$26.91 using 1 USD = 1.4162 CAD")
+# Plain $ defaults to CAD in Canada — only override when there's clear evidence of foreign currency
+HAS_USD=$(echo "$RAW_TEXT" | grep -ciE 'USD|US \$|exchange.rate|converted|conversion' || echo "0")
+if [ "$HAS_USD" -gt 0 ]; then
+    CAD_AMOUNT=$(echo "$RAW_TEXT" | grep -F 'CA$' | extract_dollar || true)
+    if [ -n "$CAD_AMOUNT" ]; then
+        AMOUNT="$CAD_AMOUNT"
+    fi
 fi
 
 # Normalize date to YYYY-MM-DD format
