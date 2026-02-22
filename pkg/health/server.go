@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -353,6 +354,10 @@ func (s *Server) validateJWT(tokenString string) (*LedgerForgeClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		// Try base64-decoding the secret (LedgerForge stores it base64-encoded)
+		if decoded, err := base64.StdEncoding.DecodeString(s.jwtSecret); err == nil {
+			return decoded, nil
 		}
 		return []byte(s.jwtSecret), nil
 	})
