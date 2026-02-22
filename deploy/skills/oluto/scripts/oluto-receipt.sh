@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 API="$SCRIPT_DIR/oluto-api.sh"
 AUTH="$SCRIPT_DIR/oluto-auth.sh"
 MATCH="$SCRIPT_DIR/oluto-match-transaction.sh"
+ATTACH="$SCRIPT_DIR/oluto-attach-receipt.sh"
 CONFIG_FILE="$HOME/.oluto-config.json"
 
 if [ $# -lt 1 ]; then
@@ -147,11 +148,17 @@ MATCH_COUNT=$(echo "$MATCHES" | jq 'length' 2>/dev/null || echo 0)
 
 # Step 3: Handle result
 if [ "$MATCH_COUNT" -gt 0 ]; then
-    # Found matching transaction
+    # Found matching transaction — attach receipt to it
     MATCH_VENDOR=$(echo "$MATCHES" | jq -r '.[0].vendor_name // "Unknown"')
     MATCH_AMOUNT=$(echo "$MATCHES" | jq -r '.[0].amount // "0.00"')
     MATCH_DATE=$(echo "$MATCHES" | jq -r '.[0].transaction_date // "unknown"')
     MATCH_ID=$(echo "$MATCHES" | jq -r '.[0].id // ""')
+
+    # Attach receipt image to the matched transaction (Azure Blob) and clean up local file
+    if [ -n "$MATCH_ID" ]; then
+        "$ATTACH" "$MATCH_ID" "$FILE_PATH" 2>/dev/null || true
+    fi
+
     echo "Receipt matched existing transaction: \$$MATCH_AMOUNT at $MATCH_VENDOR on $MATCH_DATE (ID: $MATCH_ID)"
 else
     # No match — create new expense
@@ -183,12 +190,15 @@ else
     TXN_ID=$(echo "$RESULT" | jq -r '.id // empty' 2>/dev/null || true)
 
     if [ -n "$TXN_ID" ]; then
+        # Attach receipt image to the new transaction (Azure Blob) and clean up local file
+        "$ATTACH" "$TXN_ID" "$FILE_PATH" 2>/dev/null || true
+
         TAX_INFO=""
         [ "$GST_AMOUNT" != "0.00" ] && TAX_INFO=" | GST: \$$GST_AMOUNT"
         [ "$PST_AMOUNT" != "0.00" ] && TAX_INFO="$TAX_INFO | PST: \$$PST_AMOUNT"
         echo "Receipt processed: \$$AMOUNT at $VENDOR on $TXN_DATE"
         echo "Category: Meals and Entertainment${TAX_INFO}"
-        echo "Saved as draft expense."
+        echo "Saved as draft expense. Receipt image stored."
     else
         echo "Receipt from $VENDOR: \$$AMOUNT on $TXN_DATE"
         echo "Could not save to ledger. Please create manually."

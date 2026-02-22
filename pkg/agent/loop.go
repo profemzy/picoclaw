@@ -346,11 +346,18 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"matched_by":  route.MatchedBy,
 		})
 
-	// Append media file paths to message content so the agent can reference them
+	// Append media file paths to message content so the agent can reference them.
+	// Include explicit instructions — binary files (PDFs, images) cannot be read
+	// with read_file and must be processed via skill scripts (e.g. oluto-ocr.sh).
 	userMessage := msg.Content
 	if len(msg.Media) > 0 {
 		for _, path := range msg.Media {
-			userMessage += fmt.Sprintf("\n[attached_file: %s]", path)
+			userMessage += fmt.Sprintf(
+				"\n[attached_file: %s]\n"+
+					"IMPORTANT: This is a binary file (PDF/image). Do NOT use read_file on it. "+
+					"Use the exec tool to run the appropriate skill script for processing. "+
+					"For receipts, run: oluto-receipt.sh %s",
+				path, path)
 		}
 	}
 

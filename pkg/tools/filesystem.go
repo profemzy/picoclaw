@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,17 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	content, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to read file: %v", err))
+	}
+
+	// Detect binary files (PDFs, images, etc.) and reject them with a helpful message.
+	// This prevents dumping large binary blobs into the LLM context window.
+	if isBinaryContent(content) {
+		mimeType := http.DetectContentType(content)
+		return ErrorResult(fmt.Sprintf(
+			"Cannot read binary file as text (detected type: %s, size: %d bytes). "+
+				"Binary files such as PDFs and images are not readable with read_file. "+
+				"Use the exec tool with an appropriate script to process this file.",
+			mimeType, len(content)))
 	}
 
 	return NewToolResult(string(content))
@@ -242,4 +254,20 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	return NewToolResult(result)
+}
+
+// isBinaryContent checks whether the data looks like a binary file by scanning
+// the first 8KB for null bytes. Text files (UTF-8, ASCII, Latin-1) never
+// contain null bytes, so this is a reliable heuristic.
+func isBinaryContent(data []byte) bool {
+	checkLen := 8192
+	if len(data) < checkLen {
+		checkLen = len(data)
+	}
+	for i := 0; i < checkLen; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+	return false
 }
