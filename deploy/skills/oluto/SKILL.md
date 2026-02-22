@@ -371,59 +371,57 @@ The file is already saved locally. Do NOT try to `read_file` on it — PDFs and 
 
 Only proceed with receipt processing if the user's caption or recent messages indicate this is a receipt (e.g., "receipt", "snap this", "log this expense", "process the attached receipt").
 
-### Workflow — 2 Steps
+### Preferred: One-Step Processing
 
-**Step 1: OCR — Get raw text from the receipt image**
+Use `oluto-receipt.sh` for automatic receipt processing (OCR → categorize → match/create):
 ```bash
-~/.picoclaw/workspace/skills/oluto/scripts/oluto-ocr.sh FILE_PATH
+~/.picoclaw/skills/oluto/scripts/oluto-receipt.sh FILE_PATH
 ```
 Replace `FILE_PATH` with the actual path from `[attached_file: ...]`.
 
-This returns output in the format:
+This script automatically:
+- Extracts text via OCR
+- Parses vendor, amount, date, and tax from the receipt
+- Calls AI category suggestion
+- Matches to existing transactions or creates a new draft expense
+- Attaches the receipt image to Azure Blob Storage
+
+Output example:
 ```
-TODAY: 2026-02-21
----
-[raw OCR text of the receipt]
+Receipt processed: $26.91 at Moonshot AI Pte. Ltd. on 2026-02-15
+Category: Software / Subscriptions
+Saved as draft expense. Receipt image stored.
 ```
-The `TODAY` line gives you the current date for reference. The raw text may contain markdown artifacts (like `![img-0.jpeg](...)`), store logos rendered as image refs, etc. — that's normal.
 
-**Step 2: YOU extract the structured data from the raw text**
+If the extracted data is wrong (vendor, date, category), use `oluto-update-expense.sh` to correct it.
 
-Read the OCR text carefully and extract these fields:
-- **Vendor**: The store/business name. Look for: header text, logo references (e.g., "How doers get more done" = The Home Depot), address lines with business names, or the first prominent text line. Do NOT use markdown image syntax or generic words like "Receipt".
-- **Total amount**: Find the line labeled "TOTAL" (not SUBTOTAL). Use the amount with the $ sign. The TOTAL includes taxes.
-- **Date**: Look for date patterns anywhere in the text (MM/DD/YYYY, DD/MM/YYYY, MM/DD/YY, YYYY-MM-DD, "Jan 15, 2026", etc.). Convert to YYYY-MM-DD format. For 2-digit years, assume 20xx. **CRITICAL date rule**: Use the `TODAY` line from the OCR output to know the current date. Receipts are ALWAYS for past purchases. If a date like `07/02/26` could be interpreted as either 2026-07-02 (July 2) or 2026-02-07 (Feb 7), pick the interpretation that is ON or BEFORE today's date. If both are in the past, prefer the more recent one. Never use a future date for a receipt.
-- **GST/HST**: Look for lines labeled "GST", "HST", or "GST/HST". Extract the dollar amount.
-- **PST/QST**: Look for lines labeled "PST", "QST", or "PST/QST". Extract the dollar amount. Use "0.00" if not found.
-- **Category**: Infer from the vendor type:
-  - Restaurants, cafes, fast food → "Meals and Entertainment"
-  - Hardware, office supplies → "Office Expenses"
-  - Gas stations → "Vehicle Expenses"
-  - Software, subscriptions → "Software and Technology"
-  - General/unknown → "General Expenses"
+### Updating an Expense
 
-Then create the expense:
+After creating a draft expense (or any time the user wants to correct a transaction):
 ```bash
-~/.picoclaw/workspace/skills/oluto/scripts/oluto-create-expense.sh "VENDOR" "AMOUNT" "DATE" "CATEGORY" "GST" "PST"
+~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh TRANSACTION_ID field=value [field=value ...]
 ```
 
-**Step 3: Report to user**
+Examples:
+```bash
+# Fix category
+~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh abc123 category="Software / Subscriptions"
 
-Send a brief confirmation with the key details:
-```
-Receipt processed: $AMOUNT at VENDOR on DATE
-Category: CATEGORY | GST: $X.XX
-Saved as draft expense.
+# Fix vendor and date
+~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh abc123 vendor_name="Moonshot AI" transaction_date=2026-02-15
+
+# Post a draft
+~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh abc123 status=posted
 ```
 
-If the amount could not be determined, tell the user and ask them to provide it.
+Supported fields: `vendor_name`, `amount`, `currency`, `description`, `transaction_date`, `category`, `classification`, `status`, `gst_amount`, `pst_amount`.
 
 ### STRICT Rules
 - ONLY process when user explicitly indicates it's a receipt (caption or context keywords)
 - Extract the file path from `[attached_file: ...]` — do NOT hardcode paths
-- Do NOT use `read_file` on receipt files — they are binary (PDF/image) and will fail or return garbage. Always use `oluto-ocr.sh` instead.
-- Run ONLY `oluto-ocr.sh` and `oluto-create-expense.sh` — do NOT create your own scripts or call curl directly
-- Use YOUR intelligence to extract vendor/amount/date from the OCR text — do NOT rely on regex or structured OCR fields
+- Do NOT use `read_file` on receipt files — they are binary (PDF/image) and will fail or return garbage
+- Use `oluto-receipt.sh` for processing — do NOT create your own scripts or call curl directly
+- Use `oluto-update-expense.sh` to correct any fields the user says are wrong
 - Do NOT show raw OCR text or JSON to the user — only show the final summary
 - Do NOT ask for confirmation before creating the expense — just create it
 

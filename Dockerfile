@@ -43,5 +43,8 @@ RUN /usr/local/bin/picoclaw onboard
 COPY --chown=picoclaw:picoclaw deploy/skills/oluto/ /home/picoclaw/.picoclaw/skills/oluto/
 RUN chmod +x /home/picoclaw/.picoclaw/skills/oluto/scripts/*.sh
 
+# Symlink skills into workspace so read_file tool can access SKILL.md and references
+RUN ln -s /home/picoclaw/.picoclaw/skills /home/picoclaw/.picoclaw/workspace/skills
+
 ENTRYPOINT ["picoclaw"]
 CMD ["gateway"]

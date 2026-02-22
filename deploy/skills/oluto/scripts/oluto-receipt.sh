@@ -85,6 +85,19 @@ if [ "$HAS_USD" -gt 0 ]; then
     fi
 fi
 
+# Convert month name to number (BusyBox-compatible — no date -d for month names)
+month_to_num() {
+    case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
+        jan|january)   echo "01" ;; feb|february)  echo "02" ;;
+        mar|march)     echo "03" ;; apr|april)     echo "04" ;;
+        may)           echo "05" ;; jun|june)      echo "06" ;;
+        jul|july)      echo "07" ;; aug|august)    echo "08" ;;
+        sep|september) echo "09" ;; oct|october)   echo "10" ;;
+        nov|november)  echo "11" ;; dec|december)  echo "12" ;;
+        *) return 1 ;;
+    esac
+}
+
 # Normalize date to YYYY-MM-DD format
 normalize_date() {
     local input="$1"
@@ -105,8 +118,17 @@ normalize_date() {
         return 0
     fi
 
-    # Try date command (works for many formats on BusyBox)
-    date -d "$input" +%Y-%m-%d 2>/dev/null && return 0
+    # "Month DD, YYYY" or "Month DD YYYY" (e.g. "February 15, 2026")
+    local parsed_month=$(echo "$input" | sed -n 's/.*\([A-Za-z]\{3,9\}\)[[:space:]]*\([0-9]\{1,2\}\)[,]*[[:space:]]*\([0-9]\{4\}\).*/\1/p')
+    local parsed_day=$(echo "$input" | sed -n 's/.*[A-Za-z]\{3,9\}[[:space:]]*\([0-9]\{1,2\}\)[,]*[[:space:]]*[0-9]\{4\}.*/\1/p')
+    local parsed_year=$(echo "$input" | sed -n 's/.*[A-Za-z]\{3,9\}[[:space:]]*[0-9]\{1,2\}[,]*[[:space:]]*\([0-9]\{4\}\).*/\1/p')
+    if [ -n "$parsed_month" ] && [ -n "$parsed_day" ] && [ -n "$parsed_year" ]; then
+        local mnum
+        mnum=$(month_to_num "$parsed_month") && {
+            printf "%s-%s-%02d\n" "$parsed_year" "$mnum" "$parsed_day"
+            return 0
+        }
+    fi
 
     # Last resort: replace slashes with dashes
     echo "$input" | sed 's|/|-|g'
@@ -117,10 +139,17 @@ DATE=$(normalize_date "$DATE" || echo "")
 
 # Parse date from raw text if OCR date is empty or invalid
 if [ -z "$DATE" ]; then
-    # Match "Month DD, YYYY" or "Month DD YYYY" patterns
+    # Match "Month DD, YYYY" or "Month DD YYYY" patterns in raw text
     PARSED_DATE=$(echo "$RAW_TEXT" | sed -n 's/.*\(January\|February\|March\|April\|May\|June\|July\|August\|September\|October\|November\|December\|Jan\|Feb\|Mar\|Apr\|Jun\|Jul\|Aug\|Sep\|Oct\|Nov\|Dec\)[[:space:]]*\([0-9]\{1,2\}\)[,]*[[:space:]]*\([0-9]\{4\}\).*/\1 \2 \3/p' | head -1 || true)
     if [ -n "$PARSED_DATE" ]; then
-        DATE=$(date -d "$PARSED_DATE" +%Y-%m-%d 2>/dev/null || echo "")
+        # Parse "Month DD YYYY" without date -d (BusyBox doesn't support it)
+        P_MONTH=$(echo "$PARSED_DATE" | awk '{print $1}')
+        P_DAY=$(echo "$PARSED_DATE" | awk '{print $2}')
+        P_YEAR=$(echo "$PARSED_DATE" | awk '{print $3}')
+        P_MNUM=$(month_to_num "$P_MONTH" || true)
+        if [ -n "$P_MNUM" ] && [ -n "$P_DAY" ] && [ -n "$P_YEAR" ]; then
+            DATE=$(printf "%s-%s-%02d" "$P_YEAR" "$P_MNUM" "$P_DAY")
+        fi
     fi
 fi
 
@@ -149,8 +178,16 @@ VENDOR=$(echo "$VENDOR" | sed 's/!\[.*\](.*)//' | sed 's/^#[[:space:]]*//' | xar
 
 # If vendor is empty, too short, or generic — try to extract from raw text
 if [ -z "$VENDOR" ] || [ "$VENDOR" = "Unknown" ] || [ "$VENDOR" = "Receipt" ] || [ "${#VENDOR}" -lt 3 ]; then
-    # Look for company name patterns in raw text (skip header lines like "Receipt", "Invoice")
-    PARSED_VENDOR=$(echo "$RAW_TEXT" | sed 's/^#[[:space:]]*//' | grep -v '^\s*$' | grep -viE '^(receipt|invoice|order|bill|payment|date|total|subtotal|tax|amount)' | head -1 | xargs || true)
+    # Strategy 1: Look for company name indicators (Ltd, Inc, LLC, Corp, etc.)
+    PARSED_VENDOR=$(echo "$RAW_TEXT" | sed 's/^#[[:space:]]*//' | grep -iE '(ltd|llc|inc|corp|co\.|pte|limited|gmbh|plc)' | head -1 | xargs || true)
+
+    # Strategy 2: First meaningful non-header line
+    if [ -z "$PARSED_VENDOR" ] || [ "${#PARSED_VENDOR}" -ge 60 ]; then
+        PARSED_VENDOR=$(echo "$RAW_TEXT" | sed 's/^#[[:space:]]*//' | grep -v '^\s*$' | \
+            grep -viE '^(receipt|invoice|order|bill|payment|date|total|subtotal|tax|amount|qty|item|description|price|charged|transaction|#|---|img)' | \
+            head -1 | xargs || true)
+    fi
+
     if [ -n "$PARSED_VENDOR" ] && [ "${#PARSED_VENDOR}" -ge 3 ] && [ "${#PARSED_VENDOR}" -lt 60 ]; then
         VENDOR="$PARSED_VENDOR"
     fi
