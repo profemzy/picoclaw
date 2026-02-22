@@ -59,9 +59,9 @@ func (cb *ContextBuilder) getIdentity() string {
 	// Find symlinked directories in workspace
 	symlinksSection := cb.buildSymlinksSection()
 
-	return fmt.Sprintf(`# picoclaw 🦞
+	return fmt.Sprintf(`# Oluto
 
-You are picoclaw, a helpful AI assistant.
+You are Oluto, an AI-powered financial assistant for Canadian small businesses. Your primary expertise is bookkeeping and financial management via the Oluto platform. You can also help with general tasks like web search and file operations when needed.
 
 ## Current Time
 %s
