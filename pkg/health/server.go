@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 // LedgerForgeClaims represents the JWT claims from LedgerForge auth tokens.
@@ -306,31 +307,72 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		userCtx = r.Context()
 	}
 
-	var req WebhookRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var message string
+	var businessID string
+	var mediaPaths []string
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		// Multipart form: message + optional files (max 20MB)
+		if err := r.ParseMultipartForm(20 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			errMsg := "failed to parse multipart form"
+			json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
+			return
+		}
+		message = r.FormValue("message")
+		businessID = r.FormValue("business_id")
+
+		if r.MultipartForm != nil && r.MultipartForm.File != nil {
+			for _, fhs := range r.MultipartForm.File {
+				for _, fh := range fhs {
+					file, err := fh.Open()
+					if err != nil {
+						continue
+					}
+					localPath := utils.SaveUploadedFile(file, fh.Filename)
+					file.Close()
+					if localPath != "" {
+						mediaPaths = append(mediaPaths, localPath)
+					}
+				}
+			}
+		}
+	} else {
+		// JSON body (existing path)
+		var req WebhookRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			errMsg := "invalid request body"
+			json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
+			return
+		}
+		message = req.Message
+		businessID = req.BusinessID
+	}
+
+	if strings.TrimSpace(message) == "" && len(mediaPaths) == 0 {
 		w.WriteHeader(http.StatusBadRequest)
-		errMsg := "invalid request body"
+		errMsg := "message or file is required"
 		json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
 		return
 	}
 
-	if strings.TrimSpace(req.Message) == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		errMsg := "message is required"
-		json.NewEncoder(w).Encode(WebhookResponse{Error: &errMsg})
-		return
+	// Default message for file-only uploads
+	if strings.TrimSpace(message) == "" {
+		message = "Process the attached file"
 	}
 
 	// Store business_id in context if provided
-	if req.BusinessID != "" {
-		userCtx = context.WithValue(userCtx, constants.ContextKeyBusinessID, req.BusinessID)
+	if businessID != "" {
+		userCtx = context.WithValue(userCtx, constants.ContextKeyBusinessID, businessID)
 	}
 
 	ctx, cancel := context.WithTimeout(userCtx, 120*time.Second)
 	defer cancel()
 
 	response, err := s.agentLoop.ProcessDirectWithChannel(
-		ctx, req.Message, sessionKey, "api", "mobile-client",
+		ctx, message, sessionKey, "api", "mobile-client", mediaPaths...,
 	)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

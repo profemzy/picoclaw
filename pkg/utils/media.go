@@ -141,3 +141,42 @@ func DownloadFileSimple(url, filename string) string {
 		LoggerPrefix: "media",
 	})
 }
+
+// SaveUploadedFile saves an uploaded multipart file to the picoclaw_media temp directory.
+// Returns the local file path or empty string on error.
+func SaveUploadedFile(src io.Reader, filename string) string {
+	mediaDir := filepath.Join(os.TempDir(), "picoclaw_media")
+	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
+		logger.ErrorCF("webhook", "Failed to create media directory", map[string]any{
+			"error": err.Error(),
+		})
+		return ""
+	}
+
+	safeName := SanitizeFilename(filename)
+	localPath := filepath.Join(mediaDir, uuid.New().String()[:8]+"_"+safeName)
+
+	out, err := os.Create(localPath)
+	if err != nil {
+		logger.ErrorCF("webhook", "Failed to create local file", map[string]any{
+			"error": err.Error(),
+		})
+		return ""
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		os.Remove(localPath)
+		logger.ErrorCF("webhook", "Failed to write uploaded file", map[string]any{
+			"error": err.Error(),
+		})
+		return ""
+	}
+
+	logger.DebugCF("webhook", "Uploaded file saved", map[string]any{
+		"path": localPath,
+	})
+
+	return localPath
+}

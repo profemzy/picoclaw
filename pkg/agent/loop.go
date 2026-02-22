@@ -237,12 +237,14 @@ func (al *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey stri
 func (al *AgentLoop) ProcessDirectWithChannel(
 	ctx context.Context,
 	content, sessionKey, channel, chatID string,
+	media ...string,
 ) (string, error) {
 	msg := bus.InboundMessage{
 		Channel:    channel,
 		SenderID:   "cron",
 		ChatID:     chatID,
 		Content:    content,
+		Media:      media,
 		SessionKey: sessionKey,
 	}
 
