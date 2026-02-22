@@ -269,7 +269,7 @@ else
         TAX_INFO=""
         [ "$GST_AMOUNT" != "0.00" ] && TAX_INFO=" | GST: \$$GST_AMOUNT"
         [ "$PST_AMOUNT" != "0.00" ] && TAX_INFO="$TAX_INFO | PST: \$$PST_AMOUNT"
-        echo "Receipt processed: \$$AMOUNT at $VENDOR on $TXN_DATE"
+        echo "Receipt processed: \$$AMOUNT at $VENDOR on $TXN_DATE (ID: $TXN_ID)"
         echo "Category: ${CATEGORY}${TAX_INFO}"
         echo "Saved as draft expense. Receipt image stored."
     else

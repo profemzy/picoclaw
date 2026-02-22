@@ -388,16 +388,27 @@ This script automatically:
 
 Output example:
 ```
-Receipt processed: $26.91 at Moonshot AI Pte. Ltd. on 2026-02-15
+Receipt processed: $26.91 at Moonshot AI Pte. Ltd. on 2026-02-15 (ID: a1b2c3d4)
 Category: Software / Subscriptions
 Saved as draft expense. Receipt image stored.
 ```
 
-If the extracted data is wrong (vendor, date, category), use `oluto-update-expense.sh` to correct it.
+### After Processing — Ask About Posting
 
-### Updating an Expense
+After the receipt script runs, present the summary and ask the user:
+- "I've saved this as a draft. Would you like me to post it to your ledger, or keep it as a draft for review?"
 
-After creating a draft expense (or any time the user wants to correct a transaction):
+If the user wants to **post it**, use:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh TRANSACTION_ID status=posted
+```
+Replace `TRANSACTION_ID` with the ID from the receipt script output.
+
+If the user wants to **keep it as draft**, acknowledge and move on. Draft transactions can be posted later.
+
+### Correcting an Expense
+
+If the extracted data is wrong (vendor, date, category), use `oluto-update-expense.sh` to correct it:
 ```bash
 ~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh TRANSACTION_ID field=value [field=value ...]
 ```
@@ -423,7 +434,76 @@ Supported fields: `vendor_name`, `amount`, `currency`, `description`, `transacti
 - Use `oluto-receipt.sh` for processing — do NOT create your own scripts or call curl directly
 - Use `oluto-update-expense.sh` to correct any fields the user says are wrong
 - Do NOT show raw OCR text or JSON to the user — only show the final summary
-- Do NOT ask for confirmation before creating the expense — just create it
+- After creating the draft, ALWAYS ask if the user wants to post it or keep it as a draft
+
+---
+
+## Bank Statement Import
+
+When the user uploads a CSV or PDF file that appears to be a bank statement (not a receipt), process it as a transaction import.
+
+### How to Detect a Statement Upload
+Look for file extensions `.csv` or `.pdf` in the `[attached_file: ...]` marker, combined with context like "bank statement", "import", "transactions", "statement", or if the user clicked "Import statement" in the quick actions.
+
+### Processing Flow
+
+1. Acknowledge: "I'll import your bank statement now."
+2. Parse the file:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-import-statement.sh FILE_PATH
+```
+Replace `FILE_PATH` with the path from `[attached_file: ...]`.
+
+3. Summarize what was found: "Found X transactions from [date range]. Total debits: $X, credits: $X."
+4. Ask: "Shall I import all of them, or would you like to review specific ones first?"
+5. On confirmation, pass the parsed data to the confirm script:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-confirm-import.sh 'JSON_PAYLOAD'
+```
+Where `JSON_PAYLOAD` is the parsed output from step 2, formatted as the confirm endpoint expects.
+
+6. Report: "Done! X transactions imported. You can review them on the Dashboard."
+
+### PDF Processing
+PDF files are processed asynchronously. The import script handles polling automatically. Tell the user: "Processing your PDF statement — this may take a moment."
+
+### Rules
+- Distinguish between receipts (single purchase image) and statements (CSV/PDF with multiple transactions)
+- For CSV files, results are immediate
+- For PDF files, processing may take 30-60 seconds
+- Do NOT show raw JSON to the user — summarize in plain language
+- Always ask for confirmation before importing transactions
+
+---
+
+## Quick Expense Entry
+
+When the user says things like "Log an expense", "I spent $X on Y", "Record a payment", "Add a $50 charge for office supplies", or clicks "Log expense":
+
+### Processing Flow
+
+1. Extract what you can from the message:
+   - **Amount** (required) — look for dollar values
+   - **Vendor/payee name** (required) — look for "at X" or "to X" or "for X"
+   - **Category** — if not obvious, call the suggest-category endpoint
+   - **Date** — default to today if not specified
+
+2. If amount and vendor are both present, create the expense immediately:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-create-expense.sh AMOUNT VENDOR_NAME [CATEGORY] [DATE] [DESCRIPTION]
+```
+
+3. If required fields are missing, ask conversationally:
+   - "How much was it?" (if no amount)
+   - "Who was it to?" (if no vendor)
+   - Suggest a category based on vendor name if possible
+
+4. Confirm: "Logged: $X to [vendor] under [category] on [date]."
+
+### Examples
+- "I spent $45 at Staples" → Create expense: $45, Staples, suggest category, today
+- "Log expense" → "Sure! How much was it, and who was it to?"
+- "Record $200 for web hosting at DigitalOcean" → Create expense: $200, DigitalOcean, "Software / Subscriptions", today
 
 ---
 
