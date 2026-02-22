@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# oluto-receipt.sh — Full receipt processing: OCR → match → create transaction
+# oluto-receipt.sh — Full receipt processing: OCR → categorize → match → create transaction
 # Usage: oluto-receipt.sh FILE_PATH
 # Output: Human-readable summary (NOT raw JSON)
+#
+# NOTE: This runs on Alpine/BusyBox — do NOT use grep -P (Perl regex).
+# Use grep -E (extended regex) or sed instead.
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
@@ -49,16 +52,28 @@ AMOUNT=$(echo "$OCR_DATA" | jq -r '.amount // "0.00"')
 DATE=$(echo "$OCR_DATA" | jq -r '.date // ""')
 TAX_AMOUNTS=$(echo "$OCR_DATA" | jq '.tax_amounts // null')
 
+# --- Helper: extract dollar amount from a line (BusyBox-compatible) ---
+# Matches patterns like $19.00, US$19.00, CA$26.91, $1,234.56
+extract_dollar() {
+    sed -n 's/.*[US$CA]*\$\([0-9,]*[0-9]\.[0-9][0-9]\).*/\1/p' | tr -d ',' | head -1
+}
+
 # Always prefer TOTAL from raw text over OCR amount (OCR often returns subtotal)
-PARSED_TOTAL=$(echo "$RAW_TEXT" | grep -iP '^\s*TOTAL\b' | grep -oP '\$[\d,]+\.\d{2}' | head -1 | tr -d '$,' || true)
+PARSED_TOTAL=$(echo "$RAW_TEXT" | grep -i '^[[:space:]]*total' | extract_dollar || true)
 if [ -n "$PARSED_TOTAL" ]; then
     AMOUNT="$PARSED_TOTAL"
 elif [ "$AMOUNT" = "0.00" ] || [ "$AMOUNT" = "0" ] || [ "$AMOUNT" = "null" ]; then
     # Fallback: any line with "total" keyword
-    PARSED_TOTAL=$(echo "$RAW_TEXT" | grep -i 'total' | grep -oP '\$[\d,]+\.\d{2}' | tail -1 | tr -d '$,' || true)
+    PARSED_TOTAL=$(echo "$RAW_TEXT" | grep -i 'total' | extract_dollar || true)
     if [ -n "$PARSED_TOTAL" ]; then
         AMOUNT="$PARSED_TOTAL"
     fi
+fi
+
+# Check for CAD conversion (e.g. "Charged CA$26.91 using 1 USD = 1.4162 CAD")
+CAD_AMOUNT=$(echo "$RAW_TEXT" | grep -i 'CA\$' | extract_dollar || true)
+if [ -n "$CAD_AMOUNT" ]; then
+    AMOUNT="$CAD_AMOUNT"
 fi
 
 # Normalize date to YYYY-MM-DD format
@@ -67,13 +82,13 @@ normalize_date() {
     [ -z "$input" ] || [ "$input" = "null" ] && return 1
 
     # Already YYYY-MM-DD
-    if echo "$input" | grep -qP '^\d{4}-\d{2}-\d{2}$'; then
+    if echo "$input" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
         echo "$input"
         return 0
     fi
 
     # MM-DD-YYYY or MM/DD/YYYY
-    if echo "$input" | grep -qP '^\d{2}[-/]\d{2}[-/]\d{4}$'; then
+    if echo "$input" | grep -qE '^[0-9]{2}[-/][0-9]{2}[-/][0-9]{4}$'; then
         local m=$(echo "$input" | cut -c1-2)
         local d=$(echo "$input" | cut -c4-5)
         local y=$(echo "$input" | cut -c7-10)
@@ -81,19 +96,20 @@ normalize_date() {
         return 0
     fi
 
-    # DD-MM-YYYY (try with date command)
+    # Try date command (works for many formats on BusyBox)
     date -d "$input" +%Y-%m-%d 2>/dev/null && return 0
 
-    # Try other formats
+    # Last resort: replace slashes with dashes
     echo "$input" | sed 's|/|-|g'
     return 0
 }
 
 DATE=$(normalize_date "$DATE" || echo "")
 
-# Parse date from raw text if still empty
+# Parse date from raw text if OCR date is empty or invalid
 if [ -z "$DATE" ]; then
-    PARSED_DATE=$(echo "$RAW_TEXT" | grep -oP '\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}\b' | head -1 || true)
+    # Match "Month DD, YYYY" or "Month DD YYYY" patterns
+    PARSED_DATE=$(echo "$RAW_TEXT" | sed -n 's/.*\(January\|February\|March\|April\|May\|June\|July\|August\|September\|October\|November\|December\|Jan\|Feb\|Mar\|Apr\|Jun\|Jul\|Aug\|Sep\|Oct\|Nov\|Dec\)[[:space:]]*\([0-9]\{1,2\}\)[,]*[[:space:]]*\([0-9]\{4\}\).*/\1 \2 \3/p' | head -1 || true)
     if [ -n "$PARSED_DATE" ]; then
         DATE=$(date -d "$PARSED_DATE" +%Y-%m-%d 2>/dev/null || echo "")
     fi
@@ -109,7 +125,7 @@ fi
 
 # If tax amounts are still 0, try to find tax line in raw text
 if [ "$GST_AMOUNT" = "0.00" ] || [ "$GST_AMOUNT" = "null" ]; then
-    PARSED_TAX=$(echo "$RAW_TEXT" | grep -iP '^\s*tax' | grep -oP '\$[\d,]+\.\d{2}' | head -1 | tr -d '$,' || true)
+    PARSED_TAX=$(echo "$RAW_TEXT" | grep -iE '^[[:space:]]*(tax|gst|hst)' | extract_dollar || true)
     if [ -n "$PARSED_TAX" ]; then
         GST_AMOUNT="$PARSED_TAX"
     fi
@@ -120,13 +136,13 @@ fi
 
 # Clean vendor name
 # Remove markdown image syntax like ![img-0.jpeg](img-0.jpeg)
-VENDOR=$(echo "$VENDOR" | sed 's/!\[.*\](.*)//' | sed 's/^#\s*//' | xargs)
+VENDOR=$(echo "$VENDOR" | sed 's/!\[.*\](.*)//' | sed 's/^#[[:space:]]*//' | xargs)
 
-# If vendor is empty or generic after cleanup, try to extract from raw text
+# If vendor is empty, too short, or generic — try to extract from raw text
 if [ -z "$VENDOR" ] || [ "$VENDOR" = "Unknown" ] || [ "$VENDOR" = "Receipt" ] || [ "${#VENDOR}" -lt 3 ]; then
-    # First non-empty line of raw text is often the vendor name
-    PARSED_VENDOR=$(echo "$RAW_TEXT" | sed 's/^#\s*//' | grep -v '^\s*$' | head -1 | xargs || true)
-    if [ -n "$PARSED_VENDOR" ] && [ "${#PARSED_VENDOR}" -lt 60 ]; then
+    # Look for company name patterns in raw text (skip header lines like "Receipt", "Invoice")
+    PARSED_VENDOR=$(echo "$RAW_TEXT" | sed 's/^#[[:space:]]*//' | grep -v '^\s*$' | grep -viE '^(receipt|invoice|order|bill|payment|date|total|subtotal|tax|amount)' | head -1 | xargs || true)
+    if [ -n "$PARSED_VENDOR" ] && [ "${#PARSED_VENDOR}" -ge 3 ] && [ "${#PARSED_VENDOR}" -lt 60 ]; then
         VENDOR="$PARSED_VENDOR"
     fi
 fi
@@ -138,7 +154,17 @@ if [ "$AMOUNT" = "0.00" ] || [ "$AMOUNT" = "0" ] || [ "$AMOUNT" = "null" ] || [ 
     exit 0
 fi
 
-# Step 2: Try to match existing transaction
+# Step 2: Get AI category suggestion from LedgerForge
+CATEGORY="Meals and Entertainment"
+SUGGEST_BODY=$(jq -n --arg vendor "$VENDOR" --arg amount "$AMOUNT" \
+    '{vendor_name: $vendor, amount: $amount}')
+SUGGEST_RESP=$("$API" POST "/api/v1/businesses/$BID/transactions/suggest-category" "$SUGGEST_BODY" 2>/dev/null || true)
+SUGGESTED=$(echo "$SUGGEST_RESP" | jq -r '.category // empty' 2>/dev/null || true)
+if [ -n "$SUGGESTED" ]; then
+    CATEGORY="$SUGGESTED"
+fi
+
+# Step 3: Try to match existing transaction
 MATCHES="[]"
 if [ -n "$DATE" ]; then
     MATCHES=$("$MATCH" "$AMOUNT" "$DATE" "$VENDOR" 2>/dev/null || echo '[]')
@@ -146,7 +172,7 @@ fi
 
 MATCH_COUNT=$(echo "$MATCHES" | jq 'length' 2>/dev/null || echo 0)
 
-# Step 3: Handle result
+# Step 4: Handle result
 if [ "$MATCH_COUNT" -gt 0 ]; then
     # Found matching transaction — attach receipt to it
     MATCH_VENDOR=$(echo "$MATCHES" | jq -r '.[0].vendor_name // "Unknown"')
@@ -170,6 +196,7 @@ else
         --arg amount "$AMOUNT" \
         --arg date "$TXN_DATE" \
         --arg desc "$DESCRIPTION" \
+        --arg category "$CATEGORY" \
         --arg gst "$GST_AMOUNT" \
         --arg pst "$PST_AMOUNT" \
         '{
@@ -178,7 +205,7 @@ else
             transaction_date: $date,
             description: $desc,
             classification: "expense",
-            category: "Meals and Entertainment",
+            category: $category,
             currency: "CAD",
             gst_amount: $gst,
             pst_amount: $pst
@@ -197,7 +224,7 @@ else
         [ "$GST_AMOUNT" != "0.00" ] && TAX_INFO=" | GST: \$$GST_AMOUNT"
         [ "$PST_AMOUNT" != "0.00" ] && TAX_INFO="$TAX_INFO | PST: \$$PST_AMOUNT"
         echo "Receipt processed: \$$AMOUNT at $VENDOR on $TXN_DATE"
-        echo "Category: Meals and Entertainment${TAX_INFO}"
+        echo "Category: ${CATEGORY}${TAX_INFO}"
         echo "Saved as draft expense. Receipt image stored."
     else
         echo "Receipt from $VENDOR: \$$AMOUNT on $TXN_DATE"
