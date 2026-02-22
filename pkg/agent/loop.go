@@ -356,7 +356,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 				"\n[attached_file: %s]\n"+
 					"IMPORTANT: This is a binary file (PDF/image). Do NOT use read_file on it. "+
 					"Use the exec tool to run the appropriate skill script for processing. "+
-					"For receipts, run: oluto-receipt.sh %s",
+					"For receipts, run: ~/.picoclaw/skills/oluto/scripts/oluto-receipt.sh %s",
 				path, path)
 		}
 	}
