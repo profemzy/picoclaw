@@ -48,14 +48,19 @@ RAW_TEXT=$(echo "$OCR_DATA" | jq -r '.raw_text // ""')
 
 # Extract fields from OCR
 VENDOR=$(echo "$OCR_DATA" | jq -r '.vendor // "Unknown"')
-AMOUNT=$(echo "$OCR_DATA" | jq -r '.amount // "0.00"')
+AMOUNT=$(echo "$OCR_DATA" | jq -r '.amount // "0.00"' | sed 's/[^0-9.]//g')
 DATE=$(echo "$OCR_DATA" | jq -r '.date // ""')
 TAX_AMOUNTS=$(echo "$OCR_DATA" | jq '.tax_amounts // null')
+
+# Ensure AMOUNT has a valid numeric value
+[ -z "$AMOUNT" ] && AMOUNT="0.00"
 
 # --- Helper: extract dollar amount from a line (BusyBox-compatible) ---
 # Matches patterns like $19.00, US$19.00, CA$26.91, $1,234.56
 extract_dollar() {
-    sed -n 's/.*[US$CA]*\$\([0-9,]*[0-9]\.[0-9][0-9]\).*/\1/p' | tr -d ',' | head -1
+    # Match $19.00, US$19.00, CA$26.91, $1,234.56 etc.
+    # Just find the last $ followed by digits — handles all currency prefixes.
+    sed -n 's/.*\$\([0-9,]*[0-9]\.[0-9][0-9]\).*/\1/p' | tr -d ',' | head -1
 }
 
 # Always prefer TOTAL from raw text over OCR amount (OCR often returns subtotal)
