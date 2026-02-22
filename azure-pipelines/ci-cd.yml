@@ -18,6 +18,7 @@ trigger:
       - Makefile
       - Dockerfile
       - deploy/**
+      - workspace/**
 
 pr:
   branches:
