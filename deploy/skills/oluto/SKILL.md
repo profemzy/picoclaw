@@ -507,6 +507,217 @@ When the user says things like "Log an expense", "I spent $X on Y", "Record a pa
 
 ---
 
+## Record Income
+
+When the user says things like "Record income", "I received $X from Y", "Got paid $X", "Record a payment from client", or clicks "Record income":
+
+### Processing Flow
+
+1. Extract what you can from the message:
+   - **Amount** (required) — look for dollar values
+   - **Payer name** (required) — look for "from X" or "by X"
+   - **Category** — default to "Service Revenue" if not specified
+   - **Date** — default to today if not specified
+   - **GST/HST** — calculate if the user mentions tax, or ask
+
+2. If amount and payer are both present, create the income immediately:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-record-income.sh PAYER AMOUNT DATE [CATEGORY] [GST] [PST] [DESCRIPTION]
+```
+
+3. If required fields are missing, ask conversationally:
+   - "How much did you receive?" (if no amount)
+   - "Who was it from?" (if no payer)
+
+4. Confirm: "Recorded: $X income from [payer] under [category] on [date]. Saved as draft."
+
+5. Ask: "Would you like me to post this to your ledger, or keep it as a draft for review?"
+
+6. If the user wants to **post it**, use:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh TRANSACTION_ID status=posted
+```
+
+### Examples
+- "I received $5,000 from Acme Corp" → Record income: $5,000, Acme Corp, Service Revenue, today
+- "Record income" → "Sure! How much did you receive, and who was it from?"
+- "Got paid $2,500 for consulting from Sarah Lee" → Record income: $2,500, Sarah Lee, Consulting Revenue, today
+
+### Rules
+- Income amounts are **positive** (do NOT negate them)
+- Classification is always `business_income`
+- GST/HST on income means tax **collected** from the customer
+- After creating the draft, ALWAYS ask if the user wants to post it or keep it as a draft
+
+---
+
+## Create Invoice
+
+When the user says things like "Create an invoice", "Invoice John for $5,000", "Bill a client", "Send an invoice", or clicks "Create invoice":
+
+### Processing Flow (Multi-Step Conversation)
+
+**Step 1: Identify the customer**
+
+If the user named a customer, search for them:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-list-customers.sh "CUSTOMER_NAME"
+```
+- If found, confirm: "I found [name] ([email]). Is that correct?"
+- If not found, ask: "I don't have a customer named [X]. Would you like me to create them? I'll need their name and optionally an email."
+- To create a new customer:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-api.sh POST /api/v1/businesses/BID/contacts '{"contact_type":"Customer","name":"NAME","email":"EMAIL"}'
+```
+Replace `BID` with the business ID from the environment.
+
+**Step 2: Get the next invoice number**
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-next-invoice-number.sh
+```
+Present it: "The next invoice number is INV-042. OK to use this, or would you prefer a different number?"
+
+**Step 3: Collect line items**
+
+Ask: "What are you invoicing for? Tell me the items with quantities and prices."
+
+Parse line items from the conversation. For each line item you need:
+- `item_description` (what was the work/product)
+- `quantity` (default "1" if not specified)
+- `unit_price` (required)
+
+For the `revenue_account_id`, look up available accounts:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-get-revenue-accounts.sh
+```
+Use the first Revenue account if only one exists, or ask the user to pick if multiple exist.
+
+**Step 4: Collect dates**
+- `invoice_date` — default to today
+- `due_date` — ask "When is payment due?" Default to 30 days from invoice_date if not specified
+
+**Step 5: Show summary and confirm**
+
+Before creating, show the user a summary:
+```
+Invoice INV-042 for [Customer Name]
+Date: 2026-02-22 | Due: 2026-03-24
+  1. Consulting services - 10 hrs × $150.00 = $1,500.00
+Total: $1,500.00
+```
+Ask: "Does this look correct? I'll create it as a draft."
+
+**Step 6: Create the invoice**
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-create-invoice.sh 'JSON_PAYLOAD'
+```
+
+Where JSON_PAYLOAD follows this structure:
+```json
+{
+  "invoice_number": "INV-042",
+  "customer_id": "CUSTOMER_UUID",
+  "invoice_date": "2026-02-22",
+  "due_date": "2026-03-24",
+  "line_items": [
+    {
+      "line_number": 1,
+      "item_description": "Consulting services",
+      "quantity": "10",
+      "unit_price": "150.00",
+      "revenue_account_id": "REVENUE_ACCT_UUID"
+    }
+  ]
+}
+```
+
+**Step 7: Offer to send**
+
+After creation: "Invoice INV-042 created for $1,500.00 — currently in draft status."
+Ask: "Would you like me to mark it as sent?"
+
+If yes:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-api.sh PUT /api/v1/businesses/BID/invoices/INVOICE_ID/status '{"status":"sent"}'
+```
+
+### Shortcut for Simple Invoices
+If the user provides enough info in one message (e.g., "Invoice Acme Corp $5,000 for consulting"), gather what you can and only ask for missing pieces before going to confirmation.
+
+### Rules
+- All monetary values are strings, never floats
+- Always confirm the customer before creating the invoice
+- Always show a summary before creating (customer, items, total, dates)
+- Default due date: 30 days from invoice date
+- Default quantity: "1" per line item
+- Invoice is created in draft status — always ask about marking as sent
+
+---
+
+## Record Payment (Apply to Invoice)
+
+When the user says things like "Record a payment", "John paid invoice INV-042", "Received $5,000 from Acme", "Apply payment to invoice":
+
+### Processing Flow
+
+**Step 1: Identify the context**
+
+If the user mentions a specific invoice number, find it:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-list-invoices.sh sent
+```
+Filter the output to find the matching invoice.
+
+If the user mentions a customer name, find their unpaid invoices:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-list-customers.sh "CUSTOMER_NAME"
+~/.picoclaw/skills/oluto/scripts/oluto-list-invoices.sh sent CUSTOMER_ID
+```
+
+**Step 2: Collect payment details**
+- **Amount** (required) — the payment amount
+- **Payment method** (required) — ask: "How was the payment made? (e.g., e-transfer, cheque, credit card, cash)"
+- **Payment date** — default to today
+- **Reference number** — optional (e.g., cheque number, e-transfer confirmation)
+
+**Step 3: Determine invoice application**
+- If paying a single invoice in full: auto-apply the full amount
+- If paying multiple invoices: ask which ones and how much to apply to each
+- If the payment is not for a specific invoice: record as unapplied
+
+**Step 4: Create the payment**
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-record-payment.sh 'JSON_PAYLOAD'
+```
+
+Where JSON_PAYLOAD follows this structure:
+```json
+{
+  "customer_id": "CUSTOMER_UUID",
+  "payment_date": "2026-02-22",
+  "amount": "1500.00",
+  "payment_method": "e-transfer",
+  "reference_number": "REF-123",
+  "applications": [
+    {"invoice_id": "INV_UUID", "amount_applied": "1500.00"}
+  ]
+}
+```
+
+**Step 5: Confirm**
+
+"Payment of $1,500.00 recorded via e-transfer. Applied to Invoice INV-042 (now paid in full)."
+
+If partially paid: "Invoice INV-042 has a remaining balance of $500.00 (partial payment)."
+
+### Rules
+- Always confirm the invoice(s) being paid before recording
+- Payment methods: e-transfer, cheque, credit card, cash, wire, other
+- If amount exceeds invoice balance, warn the user and suggest splitting
+- After recording, the dashboard will auto-refresh to reflect the change
+
+---
+
 ## For Full API Details
 
 Read the reference documents for complete endpoint and model specifications:
