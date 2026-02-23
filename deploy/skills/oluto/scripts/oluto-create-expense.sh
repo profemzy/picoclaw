@@ -25,9 +25,12 @@ DESCRIPTION="${7:-Receipt capture - $VENDOR}"
 
 BID="${OLUTO_BUSINESS_ID:-$(jq -r '.default_business_id' "$CONFIG_FILE")}"
 
+# Negate amount for expense (LedgerForge stores expenses as negative)
+NEG_AMOUNT="-${AMOUNT}"
+
 BODY=$(jq -n \
     --arg vendor "$VENDOR" \
-    --arg amount "$AMOUNT" \
+    --arg amount "$NEG_AMOUNT" \
     --arg date "$DATE" \
     --arg desc "$DESCRIPTION" \
     --arg category "$CATEGORY" \
@@ -38,7 +41,7 @@ BODY=$(jq -n \
         amount: $amount,
         transaction_date: $date,
         description: $desc,
-        classification: "expense",
+        classification: "business_expense",
         category: $category,
         currency: "CAD",
         gst_amount: $gst,

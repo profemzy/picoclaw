@@ -237,9 +237,12 @@ else
     TXN_DATE="${DATE:-$(date +%Y-%m-%d)}"
     DESCRIPTION="Receipt capture - $VENDOR"
 
+    # Negate amount for expense (LedgerForge stores expenses as negative)
+    NEG_AMOUNT="-${AMOUNT}"
+
     BODY=$(jq -n \
         --arg vendor "$VENDOR" \
-        --arg amount "$AMOUNT" \
+        --arg amount "$NEG_AMOUNT" \
         --arg date "$TXN_DATE" \
         --arg desc "$DESCRIPTION" \
         --arg category "$CATEGORY" \
@@ -250,7 +253,7 @@ else
             amount: $amount,
             transaction_date: $date,
             description: $desc,
-            classification: "expense",
+            classification: "business_expense",
             category: $category,
             currency: "CAD",
             gst_amount: $gst,
