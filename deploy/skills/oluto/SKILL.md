@@ -511,6 +511,48 @@ When the user says things like "Log an expense", "I spent $X on Y", "Record a pa
 
 When the user says things like "Record income", "I received $X from Y", "Got paid $X", "Record a payment from client", or clicks "Record income":
 
+### Tax Calculation on Income
+
+When recording income, you MUST calculate and include the GST/HST/PST collected. This is critical for Tax Reserved to be accurate on the dashboard.
+
+**Step 1: Determine the business's tax profile.**
+Look up the business info to find the province/tax profile:
+```bash
+~/.picoclaw/skills/oluto/scripts/oluto-api.sh GET /api/v1/businesses/BID
+```
+Replace `BID` with the business ID from the environment.
+
+Use these tax rates based on province:
+- **Ontario (ON)**: HST 13% → GST = 13% of pre-tax amount, PST = 0
+- **Alberta (AB)**: GST only 5% → GST = 5%, PST = 0
+- **British Columbia (BC)**: GST 5% + PST 7% → GST = 5%, PST = 7%
+- **Saskatchewan (SK)**: GST 5% + PST 6% → GST = 5%, PST = 6%
+- **Quebec (QC)**: GST 5% + QST 9.975% → GST = 5%, PST = 9.975%
+- **Manitoba (MB)**: GST 5% + PST 7% → GST = 5%, PST = 7%
+- **New Brunswick, Newfoundland, Nova Scotia, PEI**: HST 15% → GST = 15%, PST = 0
+- **Default**: HST 13% (Ontario)
+
+**Step 2: Calculate tax from the total amount.**
+When the user says "I received $X", assume $X is the **total including tax** unless they say otherwise.
+- Pre-tax amount = Total / (1 + tax rate)
+- GST/HST = Total - Pre-tax amount
+
+Example (Ontario, 13% HST): "I received $5,000"
+- Pre-tax = $5,000 / 1.13 = $4,424.78
+- HST collected = $5,000 - $4,424.78 = $575.22
+- Record: amount=$5,000, GST=$575.22, PST=$0.00
+
+Example (BC, 5% GST + 7% PST): "I received $5,000"
+- Pre-tax = $5,000 / 1.12 = $4,464.29
+- GST collected = $4,464.29 × 0.05 = $223.21
+- PST collected = $4,464.29 × 0.07 = $312.50
+- Record: amount=$5,000, GST=$223.21, PST=$312.50
+
+If the user says the amount is "before tax" or "plus tax", calculate differently:
+- GST = Amount × GST rate
+- PST = Amount × PST rate
+- Total = Amount + GST + PST
+
 ### Processing Flow
 
 1. Extract what you can from the message:
@@ -518,36 +560,40 @@ When the user says things like "Record income", "I received $X from Y", "Got pai
    - **Payer name** (required) — look for "from X" or "by X"
    - **Category** — default to "Service Revenue" if not specified
    - **Date** — default to today if not specified
-   - **GST/HST** — calculate if the user mentions tax, or ask
 
-2. If amount and payer are both present, create the income immediately:
+2. Calculate GST/HST/PST based on the business's tax profile (see above).
+
+3. If amount and payer are both present, create the income immediately:
 ```bash
-~/.picoclaw/skills/oluto/scripts/oluto-record-income.sh PAYER AMOUNT DATE [CATEGORY] [GST] [PST] [DESCRIPTION]
+~/.picoclaw/skills/oluto/scripts/oluto-record-income.sh PAYER AMOUNT DATE CATEGORY GST PST DESCRIPTION
 ```
+Always include the calculated GST and PST values.
 
-3. If required fields are missing, ask conversationally:
+4. If required fields are missing, ask conversationally:
    - "How much did you receive?" (if no amount)
    - "Who was it from?" (if no payer)
 
-4. Confirm: "Recorded: $X income from [payer] under [category] on [date]. Saved as draft."
+5. Confirm with tax breakdown: "Recorded: $5,000.00 income from Acme Corp (HST collected: $575.22). Saved as draft."
 
-5. Ask: "Would you like me to post this to your ledger, or keep it as a draft for review?"
+6. Ask: "Would you like me to post this to your ledger, or keep it as a draft for review?"
 
-6. If the user wants to **post it**, use:
+7. If the user wants to **post it**, use:
 ```bash
 ~/.picoclaw/skills/oluto/scripts/oluto-update-expense.sh TRANSACTION_ID status=posted
 ```
 
 ### Examples
-- "I received $5,000 from Acme Corp" → Record income: $5,000, Acme Corp, Service Revenue, today
+- "I received $5,000 from Acme Corp" → Calculate HST ($575.22 for ON), record income with tax
 - "Record income" → "Sure! How much did you receive, and who was it from?"
-- "Got paid $2,500 for consulting from Sarah Lee" → Record income: $2,500, Sarah Lee, Consulting Revenue, today
+- "Got paid $2,500 plus tax for consulting from Sarah Lee" → Calculate GST on top: $2,500 + $325 HST = $2,825 total
 
 ### Rules
 - Income amounts are **positive** (do NOT negate them)
 - Classification is always `business_income`
-- GST/HST on income means tax **collected** from the customer
+- GST/HST on income means tax **collected** from the customer — ALWAYS calculate it
+- Tax collected feeds into the Tax Reserved metric on the dashboard
 - After creating the draft, ALWAYS ask if the user wants to post it or keep it as a draft
+- Round all tax amounts to 2 decimal places
 
 ---
 
